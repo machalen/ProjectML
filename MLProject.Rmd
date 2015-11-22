@@ -1,0 +1,144 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Magdalena Arnal"
+date: "20 novembre de 2015"
+output: html_document
+---
+## Synopsis
+
+In the study of (Velloso et al, 2013) with the title: "Qualitative Activity Recognition of Weight Lifting Exercises", six young health participants were asked to perform one set of 10 repetitions of the Unilateral dumbbell biceps curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponded to the specified execution of the exercise, while the other 4 classes corresponded to common mistakes. 
+
+The 6 participants had different variables measured with accelerometers on the belt, forearm, arm, and dumbell. The goal of this project is to use the data from these devices in order to create a model to predict the manner in which the participants did the exercise.
+
+## Download and Filter data
+
+```{r Load Data}
+# Download data
+url_raw_training <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+file_dest_training <- "pml-training.csv"
+download.file(url=url_raw_training, destfile=file_dest_training, method="curl")
+trainData <- read.csv(file_dest_training)
+url_raw_testing <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+file_dest_testing <- "pml-testing.csv"
+download.file(url=url_raw_testing, destfile=file_dest_testing, method="curl")
+testData <- read.csv(file_dest_testing)
+
+#Load the data into objects
+trainData <- read.csv("pml-training.csv")
+testData <- read.csv("pml-testing.csv")
+```
+
+Once the data is loaded it is necessary to take a look into the variables. The proportion of empty data and NAs is going to be retrieved from each variable in the training set. There are 100 variables having a percentage higher than 90% of empty values and NAs. These variables are deleted, together with the first 7 variables, as they don't have any predictive value. At the end, 53 variables are considered in order to build the model.
+
+
+```{r Delete Zeros and Nas}
+#Detect empty and NA values in our dataset
+DetectPropEmpty = function(dataCol) {
+        #dataCol: Vector that possibly contain NA or empty values
+        #Return: Empty (prop of empty values) and NAs (prop of NAs)
+        Nas <- is.na(dataCol)
+        Empty = sum(dataCol[!Nas] == "")/length(dataCol) #It is necessary to extract the NA values to compute the empty values
+        NAs = sum(Nas)/length(dataCol)
+        summVec <- c(Empty, NAs)
+        names(summVec) <- c("Empty", "NAs")
+        summVec
+}
+
+DataSetExplore <- apply(trainData, 2, DetectPropEmpty)
+#Some variables have a lot missing and empty values in the dataset, that means these are sparse. 
+#Variables having a proportion of NA and missing values lower than 20% are retrieved
+
+TrainSorted <- trainData[,colSums(DataSetExplore) < 0.20]
+TestSorted <- testData[,colSums(DataSetExplore) < 0.20]
+
+#The first 7 columns are also deleted as they are not necessary for the prediction
+TrainSorted <- TrainSorted[,-c(1:7)]
+TestSorted <- TestSorted[,-c(1:7)]
+
+dim(TrainSorted)
+dim(TestSorted)
+
+#Check if the two objects have the same columns:
+all.equal(colnames(TrainSorted), colnames(TestSorted)) #One string don't match
+setdiff(colnames(TrainSorted), colnames(TestSorted)) #The string that don't match is the last column classe
+```
+
+## Sample Partition
+
+There are 19622 rows in the training dataset previously obtained. In order to build the model this dataset is divided into a training and testing (proportion 60/40).
+
+```{r Sampling}
+set.seed(2221)
+library(caret)
+inTrain <- createDataPartition(TrainSorted$classe, p=0.60, list=FALSE)
+training <- TrainSorted[inTrain,]
+testing <- TrainSorted[-inTrain,]
+```
+
+## Model Selection
+
+Several models are built with the training set, and tested in terms of accuracy with the testing set. The one with the best score will be selected in order to solve the answer for the asignment. Caret package with different methods is used for that purpose. It is important to note that the train() function by default uses bootstrap resampling which is very computationally intensive (see: args(trainControl)). In order to speed up the calculation and obtain better results, cross validation option is going to be used with k=3.
+
+### Classification Trees
+
+A model with classification trees is obtained with and without pre-processing the data. Accuracy is quite low in both cases. As there is not an improvement when scaling and centering the data, the pre-processing option is going to be avoided for the next methods.
+
+```{r Classification Trees, cache=TRUE}
+set.seed(2221)
+# Model without pre-processing 
+modFitT1 <- train(classe ~., method="rpart", 
+                trControl=trainControl(method = "cv", number = 3), data=training)
+pred <- predict(modFitT1, testing)
+cmat <- confusionMatrix(pred, testing$classe)
+round(cmat$overall['Accuracy'], 4) #0.4963
+
+#Model with pre-processsing
+modFitT2 <- train(classe ~ ., preProcess=c("center","scale"), 
+                trControl=trainControl(method = "cv", number = 3), 
+                data = training, method="rpart")
+pred <- predict(modFitT2, testing)
+cmat <- confusionMatrix(pred, testing$classe)
+round(cmat$overall['Accuracy'], 4) #0.4963
+```
+
+### Random Forest
+```{r Random Forest, cache=TRUE}
+modFitRF1 <- train(classe ~., method="rf", data=training, trControl=trainControl(method = "cv", number = 3))
+pred <- predict(modFitRF1, testing)
+cmat <- confusionMatrix(pred, testing$classe)
+round(cmat$overall['Accuracy'], 4) #0.9915
+```
+
+### Boosting with trees
+```{r Boosting, message=FALSE, warning=FALSE, comment="",cache=TRUE}
+modFitB1 <- train(classe ~., method="gbm", trControl=trainControl(method = "cv", number = 3),data=training, verbose=FALSE)
+pred <- predict(modFitB1, testing)
+cmat <- confusionMatrix(pred, testing$classe)
+round(cmat$overall['Accuracy'], 4) #0.9623 
+```
+
+### Liniar discriminant analysis
+```{r LDA, cache=TRUE}
+modFitM1 <- train(classe ~., method="lda", trControl=trainControl(method = "cv", number = 3),data=training)
+pred <- predict(modFitM1, testing)
+cmat <- confusionMatrix(pred, testing$classe)
+round(cmat$overall['Accuracy'], 4) #0.7049 
+```
+
+### Naive bayes classification
+```{r NB, message=FALSE, cache=TRUE, warning=FALSE, cache=TRUE}
+modFitM2 <- train(classe ~., method="nb", trControl=trainControl(method = "cv", number = 3), data=training)
+pred <- predict(modFitM2, testing)
+cmat <- confusionMatrix(pred, testing$classe)
+round(cmat$overall['Accuracy'], 4) #0.7392
+```
+
+### Conclusion
+
+The best model in terms of accuracy is random forest. This model is used in order to solve the training dataset with 20 rows. The answer is shown below:
+
+```{r Answer}
+pred <- predict(modFitRF1, TestSorted)
+pred #B A B A A E D B A A B C B A E E A B B B
+
+```
